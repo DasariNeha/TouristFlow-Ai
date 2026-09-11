@@ -544,6 +544,7 @@
       <section class="spot-sec" aria-label="In the spotlight">
         <div class="spot-head">
           <h2 class="app-h2">In the spotlight</h2>
+          <span class="spot-tools"><button class="cm-openlink" id="cm-openlink" type="button">Open full map →</button>
           <button class="map-toggle" id="map-toggle" type="button" aria-pressed="false">
             <span class="mt-label" data-feed="Feed">Feed</span>
             <span class="mt-knob" aria-hidden="true"></span>
@@ -688,6 +689,126 @@
     <div class="modal-card" id="tr-modal-card" role="dialog" aria-modal="true" aria-label="Booking details"></div>
   </div>
 
+  <!-- Rides & rentals (local transport) -->
+  <section class="view sub-view" id="view-rides" aria-label="Rides and rentals">
+    <header class="sub-topbar">
+      <button class="sub-back" data-sub-back type="button" aria-label="Back to Explore">←</button>
+      <span class="sub-title">Rides &amp; rentals</span>
+    </header>
+    <main class="sub-main app-inner rd-main">
+      <p class="sub-lede">One tap to your next stop — pickup at your door, no driving, no parking.</p>
+      <div class="rd-widget">
+        <div class="avail-pill" id="rd-avail" role="status"></div>
+        <form id="rd-form">
+          <div class="rd-fields">
+            <label class="rd-field"><span>Pickup</span><input id="rd-pickup" type="text" value="Current location — Indiranagar" /></label>
+            <span class="rd-dotcol" aria-hidden="true"><i class="rd-dot from"></i><i class="rd-dot to"></i></span>
+            <label class="rd-field"><span>Drop</span><input id="rd-drop" type="text" placeholder="Where to? e.g. Bangalore Palace" /></label>
+          </div>
+          <div class="rd-types" id="rd-types" role="radiogroup" aria-label="Vehicle type"></div>
+          <div class="rd-foot">
+            <span class="rd-fare" id="rd-fare">Pick a vehicle to see the fare</span>
+            <button class="btn btn-pill btn-primary" type="submit" id="rd-confirm">Confirm booking</button>
+          </div>
+        </form>
+      </div>
+      <section class="rd-routes">
+        <h2 class="app-h2">Popular routes near you</h2>
+        <div class="rd-route-list" id="rd-route-list"></div>
+      </section>
+    </main>
+  </section>
+
+  <!-- Ride tracking overlay -->
+  <div class="modal-veil" id="ride-track" hidden>
+    <div class="modal-card ride-card" id="ride-track-card" role="dialog" aria-modal="true" aria-label="Live ride tracking"></div>
+  </div>
+
+  <!-- Stays -->
+  <section class="view sub-view" id="view-stays" aria-label="Stay booking">
+    <header class="sub-topbar">
+      <button class="sub-back" data-sub-back type="button" aria-label="Back to Explore">←</button>
+      <span class="sub-title">Stays near the sites</span>
+    </header>
+    <main class="sub-main app-inner">
+      <div class="st-filters">
+        <label class="st-field"><span>Check-in</span><input type="date" id="st-checkin" /></label>
+        <label class="st-field"><span>Check-out</span><input type="date" id="st-checkout" /></label>
+        <label class="st-field"><span>Guests</span>
+          <select id="st-guests" aria-label="Guests">
+            <option value="1">1 guest</option>
+            <option value="2" selected>2 guests</option>
+            <option value="3">3 guests</option>
+            <option value="4">4 guests</option>
+            <option value="6">6+ guests</option>
+          </select>
+        </label>
+        <label class="st-field"><span>Price range</span>
+          <select id="st-price" aria-label="Price range">
+            <option value="any">Any price</option>
+            <option value="lt2k">Under ₹2,000 / night</option>
+            <option value="2to4k">₹2,000 – ₹4,000 / night</option>
+            <option value="gt4k">Above ₹4,000 / night</option>
+          </select>
+        </label>
+        <label class="st-field"><span>Stay type</span>
+          <select id="st-type" aria-label="Stay type">
+            <option value="any">All types</option>
+            <option value="Homestay">Homestay</option>
+            <option value="Hotel">Hotel</option>
+            <option value="Lodge">Lodge</option>
+          </select>
+        </label>
+      </div>
+      <section class="tk-sec">
+        <h2 class="app-h2">Nearest to you</h2>
+        <div class="st-grid" id="st-open-list"></div>
+      </section>
+      <section class="tk-sec">
+        <h2 class="app-h2">Currently unavailable</h2>
+        <p class="tk-sec-note">Fully booked for your dates — see when they open up.</p>
+        <div class="st-grid" id="st-closed-list"></div>
+      </section>
+    </main>
+  </section>
+
+  <!-- Stay detail overlay -->
+  <div class="modal-veil" id="stay-detail" hidden>
+    <div class="modal-card stay-modal" id="stay-detail-card" role="dialog" aria-modal="true" aria-label="Stay details"></div>
+  </div>
+
+  <!-- Seasonal best places -->
+  <section class="view sub-view" id="view-seasonal" aria-label="Seasonal best places">
+    <header class="sub-topbar">
+      <button class="sub-back" data-sub-back type="button" aria-label="Back to Explore">←</button>
+      <span class="sub-title">Best places right now</span>
+    </header>
+    <main class="sub-main app-inner">
+      <p class="season-lede" id="season-lede"></p>
+      <div class="season-groups" id="season-groups"></div>
+    </main>
+  </section>
+
+  <!-- Live crowd map (full view) -->
+  <section class="view sub-view" id="view-crowdmap" aria-label="Live crowd map">
+    <header class="sub-topbar">
+      <button class="sub-back" data-sub-back type="button" aria-label="Back to Explore">←</button>
+      <span class="sub-title">Live crowd map</span>
+      <span class="cm-livechip" aria-hidden="true"><i></i>LIVE · refreshes every 5s</span>
+    </header>
+    <main class="sub-main cm-main">
+      <div class="cm-toolbar">
+        <input class="cm-search" id="cm-search" type="search" list="cm-search-list" placeholder="Search a city or destination…" aria-label="Search destinations on the map" autocomplete="off" />
+        <datalist id="cm-search-list"></datalist>
+      </div>
+      <div class="cm-stage">
+        <div class="cm-map" id="cm-map" aria-label="Interactive crowd map"></div>
+        <aside class="cm-panel" id="cm-panel" hidden></aside>
+        <div class="cm-handoff" id="cm-handoff" hidden><span class="tg-mini" aria-hidden="true">TG</span>Tour Guide brought you here</div>
+      </div>
+    </main>
+  </section>
+
   <!-- Booking confirmation toast -->
   <div class="toast" id="toast" hidden></div>
 
@@ -710,16 +831,22 @@
       <button class="tg-close" id="tg-close" type="button" aria-label="Close chat">×</button>
     </div>
     <div class="tg-sheet-body" id="tg-sheet-body" aria-live="polite"></div>
+    <form class="tg-inputrow" id="tg-form">
+      <input id="tg-input" type="text" placeholder="Ask Tour Guide…" aria-label="Message Tour Guide" autocomplete="off" />
+      <button type="submit" aria-label="Send message">➤</button>
+    </form>
   </div>
 
   <!-- Bottom tab bar -->
   <nav class="tabbar" id="app-tabbar" aria-label="App navigation" hidden>
     <button class="tab active" data-tabnav="dashboard" type="button" aria-label="Home"><svg viewBox="0 0 24 24" width="21" height="21" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="M4 11l8-7 8 7v9a1 1 0 0 1-1 1h-5v-6h-4v6H5a1 1 0 0 1-1-1z"/></svg><span>Home</span></button>
     <button class="tab" data-tabnav="packages" type="button" aria-label="Trips"><svg viewBox="0 0 24 24" width="21" height="21" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="M6 4h12v17l-6-3.5L6 21z"/></svg><span>Trips</span></button>
-    <button class="tab" data-tabnav="tickets" type="button" aria-label="Tickets"><svg viewBox="0 0 24 24" width="21" height="21" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><rect x="4" y="5" width="16" height="15" rx="2"/><path d="M8 3v4M16 3v4M4 10h16"/></svg><span>Tickets</span></button>
-    <button class="tab" data-tabnav="transport" type="button" aria-label="Travel"><svg viewBox="0 0 24 24" width="21" height="21" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="M9 4 3 6v14l6-2 6 2 6-2V4l-6 2-6-2z"/><path d="M9 4v14M15 6v14"/></svg><span>Travel</span></button>
+    <button class="tab" data-tabnav="crowdmap" type="button" aria-label="Live crowd map"><svg viewBox="0 0 24 24" width="21" height="21" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="M9 4 3 6v14l6-2 6 2 6-2V4l-6 2-6-2z"/><path d="M9 4v14M15 6v14"/></svg><span>Map</span></button>
+    <button class="tab" data-tabnav="transport" type="button" aria-label="Travel booking"><svg viewBox="0 0 24 24" width="21" height="21" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="M2.5 19h19M5 19V9.5C5 7 8 5 12 5s7 2 7 4.5V19M5 13h14M9 5.5V4M15 5.5V4"/></svg><span>Travel</span></button>
   </nav>
 
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
   <script src="app.js"></script>
 </body>
 </html>

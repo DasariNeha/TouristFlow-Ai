@@ -711,6 +711,7 @@
     fab.addEventListener("click", () => {
       const sheet = document.getElementById("tg-sheet");
       sheet.hidden = !sheet.hidden;
+      if (!sheet.hidden) document.body.classList.remove("tg-docked");
       if (!sheet.hidden && !sheet.dataset.started) {
         sheet.dataset.started = "1";
         startGuideChat();
@@ -1171,7 +1172,14 @@
 
   /* ---------- navigation wiring ---------- */
 
-  const SUB_VIEWS = { "Ready-made journeys": "view-packages", "Skip-the-line entry": "view-tickets", "Travel between cities": "view-transport" };
+  const SUB_VIEWS = {
+    "Ready-made journeys": "view-packages",
+    "Skip-the-line entry": "view-tickets",
+    "Travel between cities": "view-transport",
+    "Rides & rentals": "view-rides",
+    "Stays near the sites": "view-stays",
+    "When to go where": "view-seasonal",
+  };
 
   function initSubpages() {
     document.addEventListener("click", (e) => {
@@ -1193,6 +1201,9 @@
     renderTickets();
     initTicketEvents();
     initTransport();
+    initRides();
+    initStays();
+    initSeasonal();
   }
 
   function showTabbarIfInApp() {
@@ -1595,6 +1606,1029 @@
     });
     renderTransport();
   }
+
+  /* ---------- new sub-pages: rides, stays, seasonal (injected) ---------- */
+  /* ============================================================
+     RIDES & RENTALS — on-demand local transport (Uber-style)
+     ============================================================ */
+
+  const RD_TYPES = [
+    { id: "bike", icon: "🏍️", name: "Bike", cap: "1 rider", eta: "2 min", rate: 12 },
+    { id: "auto", icon: "🛺", name: "Auto", cap: "3 riders", eta: "4 min", rate: 18 },
+    { id: "cab", icon: "🚗", name: "Cab", cap: "4 riders", eta: "6 min", rate: 26 },
+    { id: "van", icon: "🚐", name: "Group van", cap: "7 riders", eta: "9 min", rate: 38 },
+  ];
+  const RD_BASE = 35; // base fare component
+
+  const RD_ROUTES = [
+    { from: "City Center", to: "Bangalore Palace", mins: 22, fare: 240 },
+    { from: "Indiranagar", to: "Lalbagh Glass House", mins: 18, fare: 195 },
+    { from: "Airport (BLR)", to: "M.G. Road", mins: 48, fare: 780 },
+    { from: "Cubbon Park", to: "Commercial Street", mins: 9, fare: 120 },
+    { from: "Hotel zone", to: "Nandi Hills gate", mins: 65, fare: 1150 },
+  ];
+
+  const RD_DRIVERS = [
+    { name: "Ravi K.", vehicle: "Auto · KA 01 AB 4482", rating: 4.8, plate: "KA 01 AB 4482" },
+    { name: "Suresh M.", vehicle: "Cab · KA 05 MJ 1170", rating: 4.9, plate: "KA 05 MJ 1170" },
+    { name: "Anil P.", vehicle: "Bike · KA 03 HK 9021", rating: 4.7, plate: "KA 03 HK 9021" },
+  ];
+
+  const rdState = { type: "auto" };
+
+  function renderRideTypes() {
+    document.getElementById("rd-types").innerHTML = RD_TYPES.map((v) =>
+      '<button type="button" role="radio" aria-checked="' + (rdState.type === v.id) + '" ' +
+      'class="rd-type' + (rdState.type === v.id ? " selected" : "") + '" data-rdtype="' + v.id + '">' +
+        '<span class="rd-ic" aria-hidden="true">' + v.icon + '</span>' +
+        '<span class="rd-name">' + v.name + '</span>' +
+        '<span class="rd-meta">' + v.cap + '</span>' +
+        '<span class="rd-eta">⚡ ' + v.eta + ' away</span>' +
+        '<span class="rd-est">~' + fmtINR(RD_BASE + v.rate * 5) + '</span>' +
+      '</button>'
+    ).join("");
+    updateRideFare();
+  }
+
+  function updateRideFare() {
+    const v = RD_TYPES.find((t) => t.id === rdState.type);
+    const drop = document.getElementById("rd-drop").value.trim();
+    const km = Math.max(5, Math.min(30, drop.length * 0.35)); // playful distance mock from input length
+    const fare = RD_BASE + Math.round(v.rate * km);
+    document.getElementById("rd-fare").innerHTML = v.name + " · ~" + km.toFixed(1) + " km · <strong>" + fmtINR(fare) + "</strong>";
+  }
+
+  function renderRideRoutes() {
+    document.getElementById("rd-route-list").innerHTML = RD_ROUTES.map((r, i) =>
+      '<button type="button" class="rd-route" data-rroute="' + i + '">' +
+        '<span class="rr-path"><span class="rr-dot from" aria-hidden="true"></span>' +
+        '<span class="rr-line" aria-hidden="true"></span>' +
+        '<span class="rr-dot to" aria-hidden="true"></span>' +
+        '<span class="rr-txt"><strong>' + r.from + ' → ' + r.to + '</strong>' +
+        '<small>~' + r.mins + ' min · typical ' + fmtINR(r.fare) + '</small></span></span>' +
+        '<span class="rr-use">Use route</span>' +
+      '</button>'
+    ).join("");
+  }
+
+  function openRideTracking() {
+    const v = RD_TYPES.find((t) => t.id === rdState.type);
+    const d = RD_DRIVERS[rdState.type === "bike" ? 2 : rdState.type === "cab" ? 1 : 0];
+    let eta = 3;
+    const card = document.getElementById("ride-track-card");
+    const paint = () => {
+      card.innerHTML =
+        '<div class="modal-head"><h2>Finding your ' + v.name.toLowerCase() + '</h2>' +
+          '<button type="button" class="modal-x" data-ride-close aria-label="Close tracking">×</button></div>' +
+        '<div class="modal-body ride-body">' +
+          '<div class="ride-live"><span class="ride-pulse" aria-hidden="true"></span>' +
+            (eta > 0
+              ? '<strong>' + d.name + '</strong> is <span id="ride-eta">' + eta + ' min</span> away'
+              : '<strong>' + d.name + '</strong> has arrived — enjoy the ride!') +
+          '</div>' +
+          '<p class="ride-sub">' + d.vehicle + ' · ★ ' + d.rating + ' · verified driver</p>' +
+          '<div class="ride-bar"><i style="width:' + Math.max(0, 100 - eta * 25) + '%"></i></div>' +
+          '<div class="ride-map" aria-hidden="true">' +
+            '<svg viewBox="0 0 320 90"><path d="M8 70 C 70 62, 90 26, 160 30 S 250 58, 312 20" fill="none" stroke="rgba(59,30,94,0.2)" stroke-width="3" stroke-dasharray="2 7" stroke-linecap="round"/>' +
+            '<path d="M8 70 C 70 62, 90 26, 160 30" fill="none" stroke="var(--purple)" stroke-width="3.5" stroke-linecap="round"/>' +
+            '<circle cx="8" cy="70" r="5" fill="var(--purple)"/><circle cx="312" cy="20" r="5" fill="var(--dot-green)"/>' +
+            '<text x="160" y="18" text-anchor="middle" font-size="11" fill="var(--ink-mute)">driver en route</text></svg>' +
+          '</div>' +
+          '<div class="ride-actions"><button type="button" class="btn btn-pill btn-primary" data-ride-done>Simulate arrival</button>' +
+          '<button type="button" class="ai-dismiss" data-ride-close>Cancel ride</button></div>' +
+        '</div>';
+    };
+    paint();
+    document.getElementById("ride-track").hidden = false;
+    const tick = setInterval(() => {
+      eta = Math.max(0, eta - 1);
+      const elEta = document.getElementById("ride-eta");
+      if (elEta) elEta.textContent = eta + " min";
+      const bar = card.querySelector(".ride-bar i");
+      if (bar) bar.style.width = Math.max(5, 100 - eta * 25) + "%";
+      if (eta === 0) {
+        const live = card.querySelector(".ride-live");
+        if (live) live.innerHTML = "<strong>" + d.name + "</strong> has arrived — enjoy the ride!";
+        clearInterval(tick);
+      }
+    }, 1500);
+    card.onclick = (e) => {
+      if (e.target.closest("[data-ride-close]")) { clearInterval(tick); document.getElementById("ride-track").hidden = true; card.onclick = null; }
+      if (e.target.closest("[data-ride-done]")) { clearInterval(tick); document.getElementById("ride-track").hidden = true; card.onclick = null; toast("Ride completed — fare charged to your saved method"); }
+    };
+  }
+
+  function initRides() {
+    if (!el("rd-form")) return;
+    renderRideTypes();
+    renderRideRoutes();
+    document.getElementById("rd-avail").innerHTML =
+      '<span class="rd-avail-dot" aria-hidden="true"></span>' +
+      '<strong>' + (2 + RD_TYPES.length) + ' vehicles nearby</strong> · autos 4 min, cabs 6 min';
+    document.getElementById("rd-types").addEventListener("click", (e) => {
+      const t = e.target.closest("[data-rdtype]");
+      if (!t) return;
+      rdState.type = t.dataset.rdtype;
+      renderRideTypes();
+    });
+    document.getElementById("rd-drop").addEventListener("input", updateRideFare);
+    document.getElementById("rd-route-list").addEventListener("click", (e) => {
+      const b = e.target.closest("[data-rroute]");
+      if (!b) return;
+      const r = RD_ROUTES[+b.dataset.rroute];
+      document.getElementById("rd-pickup").value = r.from + " (current area)";
+      document.getElementById("rd-drop").value = r.to;
+      updateRideFare();
+      toast("Route prefilled — pick a vehicle and confirm");
+    });
+    document.getElementById("rd-form").addEventListener("submit", (e) => {
+      e.preventDefault();
+      const drop = document.getElementById("rd-drop").value.trim();
+      if (!drop) { toast("Add a drop point to continue"); return; }
+      openRideTracking();
+    });
+  }
+
+  /* ============================================================
+     STAYS — homestays / hotels / lodges near the destination
+     ============================================================ */
+
+  const STAYS = [
+    { id: "gulmohar", name: "Gulmohar Homestay", type: "Homestay", dist: "0.8 km from Lalbagh", rating: 4.7, reviews: 212, price: 2450, tags: ["Free breakfast", "Garden view"], available: true,
+      amenities: ["Wi-Fi", "AC rooms", "Home-cooked meals", "Hot water", "Power backup", "Parking"], rooms: [{ name: "Garden double", cap: 2, price: 2450 }, { name: "Family room", cap: 4, price: 3600 }], cancel: "Free cancellation until 24 h before check-in" },
+    { id: "palaceh", name: "Palace View Hotel", type: "Hotel", dist: "1.2 km from Bangalore Palace", rating: 4.4, reviews: 890, price: 4100, tags: ["Rooftop dining", "Palace view"], available: true,
+      amenities: ["Wi-Fi", "AC rooms", "Restaurant", "Gym", "24×7 front desk", "Laundry"], rooms: [{ name: "Deluxe king", cap: 2, price: 4100 }, { name: "Twin suite", cap: 3, price: 5200 }], cancel: "Free cancellation until 48 h before check-in" },
+    { id: "nandi", name: "Nandi Trails Lodge", type: "Lodge", dist: "2.5 km from Nandi Hills gate", rating: 4.2, reviews: 141, price: 1550, tags: ["Hill sunrise walk", "Bonfire"], available: true,
+      amenities: ["Wi-Fi", "Hot water", "Bonfire deck", "Parking", "Simple canteen"], rooms: [{ name: "Twin basic", cap: 2, price: 1550 }, { name: "Quad room", cap: 4, price: 2400 }], cancel: "Free cancellation until 12 h before check-in" },
+    { id: "heritage", name: "Heritage Courtyard Stay", type: "Homestay", dist: "0.5 km from Tipu's Summer Palace", rating: 4.8, reviews: 305, price: 3350, tags: ["Courtyard café", "Heritage build"], available: true,
+      amenities: ["Wi-Fi", "AC rooms", "Breakfast", "Courtyard seating", "Bicycle rental"], rooms: [{ name: "Courtyard double", cap: 2, price: 3350 }, { name: "Mansion suite", cap: 3, price: 4600 }], cancel: "Free cancellation until 24 h before check-in" },
+    { id: "lakeview", name: "Lakeview Retreat", type: "Hotel", dist: "1.9 km from Hebbal Lake", rating: 4.5, reviews: 460, price: 5200, tags: ["Lake view", "Spa"], available: false, next: "Sep 18",
+      amenities: ["Wi-Fi", "AC rooms", "Spa", "Restaurant", "Pool"], rooms: [], cancel: "Free cancellation until 48 h before check-in" },
+    { id: "monsoon", name: "Monsoon Woods Lodge", type: "Lodge", dist: "3.1 km from Bannerghatta", rating: 4.1, reviews: 98, price: 1250, tags: ["Forest edge", "Birdwatching"], available: false, next: "Sep 24",
+      amenities: ["Hot water", "Guided walks", "Canteen", "Parking"], rooms: [], cancel: "Free cancellation until 12 h before check-in" },
+  ];
+
+  const stState = { price: "any", type: "any", guests: "2", checkin: "", checkout: "" };
+
+  function defaultDates() {
+    const ci = new Date(); ci.setDate(ci.getDate() + 2);
+    const co = new Date(ci); co.setDate(co.getDate() + 2);
+    return [ci.toISOString().slice(0, 10), co.toISOString().slice(0, 10)];
+  }
+
+  function stNights() {
+    if (!stState.checkin || !stState.checkout) return 2;
+    const n = Math.round((new Date(stState.checkout) - new Date(stState.checkin)) / 86400000);
+    return Math.max(1, n || 2);
+  }
+
+  function renderStays() {
+    const list = STAYS.filter((s) => {
+      if (stState.type !== "any" && s.type !== stState.type) return false;
+      if (stState.price === "lt2k" && s.price >= 2000) return false;
+      if (stState.price === "2to4k" && (s.price < 2000 || s.price > 4000)) return false;
+      if (stState.price === "gt4k" && s.price <= 4000) return false;
+      return true;
+    });
+    const open = list.filter((s) => s.available);
+    const closed = list.filter((s) => !s.available);
+    const card = (s, closedCard) =>
+      '<article class="st-card' + (closedCard ? " st-unavailable" : "") + '">' +
+        '<div class="st-hero sh-' + s.id + '" aria-hidden="true"><span class="st-type-chip">' + s.type + '</span>' +
+        (closedCard ? '<span class="st-na-badge">Not available for selected dates</span>' : '') + '</div>' +
+        '<div class="st-body">' +
+          '<div class="st-top"><h3>' + s.name + '</h3><span class="st-rating">★ ' + s.rating + '</span></div>' +
+          '<p class="st-dist">' + s.dist + ' · ' + s.reviews + ' reviews</p>' +
+          '<div class="st-tags">' + s.tags.map((t) => '<span class="st-tag">' + t + '</span>').join("") + '</div>' +
+          '<div class="st-foot"><span class="st-price">' + fmtINR(s.price) + '<small> / night</small></span>' +
+            (closedCard
+              ? '<span class="st-next">Opens ' + s.next + '</span>'
+              : '<button type="button" class="btn btn-pill btn-primary st-book" data-stay="' + s.id + '">Book now</button>') +
+          '</div>' +
+        '</div>' +
+      '</article>';
+    document.getElementById("st-open-list").innerHTML = open.map((s) => card(s, false)).join("") || '<p class="s-empty">No stays match these filters.</p>';
+    document.getElementById("st-closed-list").innerHTML = closed.map((s) =>
+      card(s, true).replace('class="btn btn-pill', 'data-closed="' + s.id + '" class="btn btn-pill')).join("") || '<p class="s-empty">Nothing unavailable — all picks are open!</p>';
+  }
+
+  function openStayDetail(id) {
+    const s = STAYS.find((x) => x.id === id);
+    if (!s || !s.available) return;
+    const nights = stNights();
+    const base = s.rooms[0].price * nights;
+    const tax = Math.round(base * 0.12);
+    document.getElementById("stay-detail-card").innerHTML =
+      '<div class="modal-head"><h2>' + s.name + '</h2><button type="button" class="modal-x" data-stay-close aria-label="Close stay details">×</button></div>' +
+      '<div class="modal-body stay-body">' +
+        '<div class="stay-gallery">' + [s.name, s.rooms[0].name, "Around the property"].map((cap, i) =>
+          '<figure class="sg-item sh-' + s.id + (i === 0 ? "" : "-" + (i + 1)) + '"><figcaption>' + cap + '</figcaption></figure>').join("") + '</div>' +
+        '<p class="stay-meta">' + s.type + ' · ★ ' + s.rating + ' (' + s.reviews + ' reviews) · ' + s.dist + '</p>' +
+        '<div class="stay-sec"><h4>Amenities</h4><div class="stay-amen">' + s.amenities.map((a) => '<span class="st-tag">' + a + '</span>').join("") + '</div></div>' +
+        '<div class="stay-sec"><h4>Rooms for ' + stState.guests + ' guest' + (stState.guests === "1" ? "" : "s") + '</h4>' +
+          '<div class="stay-rooms">' + s.rooms.map((r, i) =>
+            '<label class="stay-room"><input type="radio" name="st-room" value="' + i + '"' + (i === 0 ? " checked" : "") + ' />' +
+            '<span>' + r.name + ' · sleeps ' + r.cap + '</span><strong>' + fmtINR(r.price) + '/night</strong></label>').join("") + '</div></div>' +
+        '<div class="stay-sec"><h4>Price summary</h4><div class="stay-pricebox">' +
+          '<div><span>' + fmtINR(s.rooms[0].price) + ' × ' + nights + ' night' + (nights > 1 ? "s" : "") + '</span><strong>' + fmtINR(base) + '</strong></div>' +
+          '<div><span>Taxes &amp; fees (12%)</span><strong>' + fmtINR(tax) + '</strong></div>' +
+          '<div class="stay-total"><span>Total</span><strong>' + fmtINR(base + tax) + '</strong></div>' +
+        '</div></div>' +
+        '<p class="stay-cancel">↺ ' + s.cancel + '</p>' +
+        '<div class="stay-actions"><button type="button" class="btn btn-pill btn-primary" data-stay-book="' + s.id + '">Book stay</button>' +
+        '<button type="button" class="ai-dismiss" data-stay-close>Close</button></div>' +
+      '</div>';
+    const veil = document.getElementById("stay-detail");
+    veil.hidden = false;
+    veil.onclick = (e) => {
+      if (e.target.closest("[data-stay-close]")) veil.hidden = true;
+      if (e.target.closest("[data-stay-book]")) {
+        veil.hidden = true;
+        toast("Stay booked — " + s.name + " · " + nights + " night" + (nights > 1 ? "s" : "") + " · check Trips");
+      }
+    };
+  }
+
+  function initStays() {
+    if (!el("st-open-list")) return;
+    const [ci, co] = defaultDates();
+    document.getElementById("st-checkin").value = ci;
+    document.getElementById("st-checkout").value = co;
+    stState.checkin = ci; stState.checkout = co;
+    const rerender = () => {
+      stState.price = document.getElementById("st-price").value;
+      stState.type = document.getElementById("st-type").value;
+      stState.guests = document.getElementById("st-guests").value;
+      stState.checkin = document.getElementById("st-checkin").value;
+      stState.checkout = document.getElementById("st-checkout").value;
+      renderStays();
+    };
+    ["st-price", "st-type", "st-guests", "st-checkin", "st-checkout"].forEach((id) =>
+      document.getElementById(id).addEventListener("change", rerender));
+    document.getElementById("st-open-list").addEventListener("click", (e) => {
+      const b = e.target.closest("[data-stay]");
+      if (b) openStayDetail(b.dataset.stay);
+    });
+    document.getElementById("st-closed-list").addEventListener("click", (e) => {
+      if (e.target.closest("[data-closed]")) toast("We'll ping you when this stay opens up");
+    });
+    renderStays();
+  }
+
+  /* ============================================================
+     SEASONAL — best places right now, with the "why now"
+     ============================================================ */
+
+  const SEASON = {
+    month: "September",
+    blurb: "The monsoon is easing and the peaks are still green — September is the sweet spot between rain and rush.",
+    groups: [
+      { title: "Cooler hill escapes", places: [
+        { id: "coorg", name: "Coorg", region: "Karnataka", quiet: 40, cheaper: 30, weather: "18–24°C · light drizzle", why: "Coffee estates are washed green, streams are full, and peak-season tourists haven't arrived yet.", theme: "hills" },
+        { id: "munnar", name: "Munnar", region: "Kerala", quiet: 35, cheaper: 25, weather: "16–22°C · misty mornings", why: "Tea slopes at their greenest, waterfalls swollen, and hotel rates well below December prices.", theme: "hills" },
+      ]},
+      { title: "Off-peak beach towns", places: [
+        { id: "gokarna", name: "Gokarna", region: "Karnataka", quiet: 45, cheaper: 35, weather: "24–29°C · clearing skies", why: "The sea has calmed, shacks are reopening, and you get the coves nearly to yourself before Goa-season crowds.", theme: "beach" },
+        { id: "vizag", name: "Visakhapatnam", region: "Andhra Pradesh", quiet: 30, cheaper: 20, weather: "25–30°C · breezy", why: "Beach road walks without summer heat, and flight prices sit at their yearly low.", theme: "beach" },
+      ]},
+      { title: "Monsoon-friendly heritage", places: [
+        { id: "hampi", name: "Hampi", region: "Karnataka", quiet: 50, cheaper: 28, weather: "23–30°C · occasional rain", why: "Ruins glow after rain and the Tungabhadra runs full — with none of the December tour buses.", theme: "heritage" },
+        { id: "mahabaleshwar", name: "Mahabaleshwar", region: "Maharashtra", quiet: 38, cheaper: 32, weather: "15–21°C · last rains", why: "Strawberry country turns rainforest-green, viewpoints pour with clouds, weekend rates are soft.", theme: "heritage" },
+      ]},
+    ],
+  };
+
+  function renderSeasonal() {
+    document.getElementById("season-lede").textContent =
+      "Best places to visit this " + SEASON.month + " — " + SEASON.blurb;
+    document.getElementById("season-groups").innerHTML = SEASON.groups.map((g) =>
+      '<section class="season-group"><h2 class="app-h2">' + g.title + '</h2>' +
+      '<div class="season-grid">' + g.places.map((p) =>
+        '<article class="season-card">' +
+          '<div class="se-hero se-' + p.theme + '" aria-hidden="true"></div>' +
+          '<div class="se-body">' +
+            '<h3>' + p.name + '<small> · ' + p.region + '</small></h3>' +
+            '<p class="se-why">' + p.why + '</p>' +
+            '<div class="se-chips">' +
+              '<span class="se-chip"><strong>' + p.quiet + '%</strong> quieter than peak</span>' +
+              '<span class="se-chip"><strong>~' + p.cheaper + '%</strong> cheaper stays</span>' +
+              '<span class="se-chip"><strong>' + p.weather.split("·")[0].trim() + '</strong> ' + p.weather.split("·")[1] + '</span>' +
+            '</div>' +
+            '<button type="button" class="btn btn-pill btn-primary se-plan" data-plan="' + p.id + '">Plan a trip here</button>' +
+          '</div>' +
+        '</article>').join("") + '</div></section>'
+    ).join("");
+  }
+
+  function initSeasonal() {
+    if (!el("season-groups")) return;
+    renderSeasonal();
+    document.getElementById("season-groups").addEventListener("click", (e) => {
+      const b = e.target.closest("[data-plan]");
+      if (!b) return;
+      toast("Great pick — opening packages & stays for " + b.dataset.plan);
+      showView("view-packages");
+    });
+  }
+
+
+  /* ---------- LIVE CROWD MAP + TOUR GUIDE TOOLS (injected below) ----------
+  /* ============================================================
+     LIVE CROWD MAP (Leaflet) + TOUR GUIDE TOOL LAYER
+     One dataset (DESTINATIONS) feeds the map, the spotlight cards,
+     the ticket flow and every Tour Guide tool call — they can never
+     disagree.
+     ============================================================ */
+
+  /* ---------- Dataset enrichment: coordinates, prices, queues ---------- */
+
+  const CITY_COORDS = {
+    bengaluru: [12.9716, 77.5946],
+    delhi: [28.6139, 77.2090],
+    jaipur: [26.9124, 75.7873],
+    agra: [27.1767, 78.0081],
+    mumbai: [19.0760, 72.8777],
+  };
+
+  const USER_POS = {
+    bengaluru: [12.9784, 77.6408], // Indiranagar
+    delhi: [28.6315, 77.2167],     // Connaught Place
+    jaipur: [26.9255, 75.8234],    // Pink City
+    agra: [27.1579, 78.0368],      // Taj Ganj
+    mumbai: [18.9067, 72.8147],    // Colaba
+  };
+
+  const DEST_COORDS = {
+    "bangalore-palace": [12.9985, 77.5921],
+    "lalbagh": [12.9507, 77.5848],
+    "cubbon-park": [12.9763, 77.5929],
+    "vidhana-soudha": [12.9794, 77.5910],
+    "tipu-palace": [12.9600, 77.5730],
+    "red-fort": [28.6562, 77.2410],
+    "qutub-minar": [28.5245, 77.1855],
+    "hawa-mahal": [26.9239, 75.8267],
+    "amer-fort": [26.9855, 75.8513],
+    "taj-mahal": [27.1751, 78.0421],
+    "gateway-india": [18.9220, 72.8347],
+  };
+
+  const CM_PRICES = {
+    "bangalore-palace": { ind: 250, fx: 500 },
+    "lalbagh": { ind: 30, fx: 60 },
+    "cubbon-park": { ind: 0, fx: 0 },
+    "vidhana-soudha": { ind: 0, fx: 0 },
+    "tipu-palace": { ind: 20, fx: 200 },
+    "red-fort": { ind: 35, fx: 500 },
+    "qutub-minar": { ind: 35, fx: 550 },
+    "hawa-mahal": { ind: 50, fx: 200 },
+    "amer-fort": { ind: 200, fx: 500 },
+    "taj-mahal": { ind: 50, fx: 1100 },
+    "gateway-india": { ind: 0, fx: 0 },
+  };
+
+  const ATTR_EXTRA = {
+    "visvesvaraya": { coords: [12.9815, 77.5964] },
+    "cubbon-shetty": { coords: [12.9882, 77.5926] },
+    "charminar": { coords: [17.3616, 78.4747] },
+    "golconda": { coords: [17.3833, 78.4076] },
+    "om-beach": { coords: [14.5432, 74.3174] },
+  };
+
+  DESTINATIONS.forEach((d) => {
+    d.coords = DEST_COORDS[d.id];
+    d.price = CM_PRICES[d.id] || { ind: 0, fx: 0 };
+    d.queueMin = Math.round(d.capacity * 0.55);
+  });
+
+  // Ticket catalogue: enrich existing rows and derive one per tracked
+  // destination so "Book tickets" can pre-fill for every pin.
+  ATTRACTIONS.forEach((a) => {
+    a.coords = (ATTR_EXTRA[a.id] || {}).coords || DEST_COORDS[a.id];
+    a.capacity = { low: 25, moderate: 55, high: 85 }[a.crowd];
+  });
+  (() => {
+    const have = new Set(ATTRACTIONS.map((a) => a.id));
+    DESTINATIONS.forEach((d) => {
+      if (have.has(d.id)) return;
+      const closes = d.hours.includes("–") ? d.hours.split("–")[1].replace("(", "").trim() : "—";
+      ATTRACTIONS.push({
+        id: d.id, name: d.name, city: d.location.split(", ").pop(),
+        cat: d.category.split(" · ")[0], distance: parseFloat(d.distance) || 1,
+        priceIn: d.price.ind, priceFx: d.price.fx, hours: d.hours,
+        openNow: true, closes: closes, crowd: d.crowd, desc: d.description.slice(0, 70) + "…",
+      });
+    });
+  })();
+
+  /* ---------- Mocked-live drift engine (crowd feed) ---------- */
+
+  const cmDrift = { timer: null, listeners: [] };
+
+  function onCrowdDrift(fn) { cmDrift.listeners.push(fn); }
+
+  function startCrowdDrift() {
+    if (cmDrift.timer) return;
+    cmDrift.timer = setInterval(() => {
+      DESTINATIONS.forEach((d) => {
+        if (Math.random() > 0.45) return;
+        const delta = Math.round(Math.random() * 6 - 3);
+        d.capacity = Math.max(8, Math.min(99, d.capacity + delta));
+        d.crowd = d.capacity >= 80 ? "high" : d.capacity >= 50 ? "moderate" : "low";
+        d.vsAverage = Math.max(-60, Math.min(70, d.vsAverage + (delta > 0 ? 2 : -2)));
+        d.queueMin = Math.max(0, Math.round(d.capacity * 0.55 + (Math.random() * 6 - 3)));
+      });
+      cmDrift.listeners.forEach((fn) => fn());
+    }, 5000);
+  }
+
+  /* ---------- CrowdMap component ---------- */
+
+  const CM_INSTANCES = {};
+  const CM_ALERTS = new Set();
+
+  function getCrowdMap(key) {
+    if (CM_INSTANCES[key]) return CM_INSTANCES[key];
+    const mapEl = document.getElementById(key === "main" ? "cm-map" : "map-canvas");
+    const panelEl = document.getElementById(key === "main" ? "cm-panel" : "map-panel");
+    if (!mapEl || !panelEl) return null;
+    if (!window.L) {
+      mapEl.innerHTML = '<p class="s-empty" style="padding:24px">Map unavailable right now — check your connection.</p>';
+      return null;
+    }
+    const cm = {
+      key,
+      map: null,
+      layer: null,
+      markers: new Map(),
+      userMark: null,
+      lastLoc: null,
+      currentId: null,
+      mapEl, panelEl,
+      mini: key === "mini",
+
+      ensure() {
+        if (this.map) { this.map.invalidateSize(); return; }
+        this.map = L.map(mapEl, { zoomControl: true, attributionControl: true, scrollWheelZoom: !this.mini });
+        this.map.setView(USER_POS[state.currentLocation] || CITY_COORDS[state.currentLocation] || [22, 79], 12);
+        // Keyless dark basemap (Esri World Dark Gray Canvas); labels via its reference layer.
+        this.baseLayer = L.tileLayer(
+          "https://server.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Dark_Gray_Base/MapServer/tile/{z}/{y}/{x}",
+          { attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors &copy; <a href="https://www.esri.com/">Esri</a>', maxZoom: 16 }
+        ).addTo(this.map);
+        L.tileLayer(
+          "https://server.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Dark_Gray_Reference/MapServer/tile/{z}/{y}/{x}",
+          { maxZoom: 16, opacity: 0.85, pane: "shadowPane", interactive: false }
+        ).addTo(this.map);
+        this.layer = L.layerGroup().addTo(this.map);
+        this.map.on("zoomend", () => this.stylePins());
+        this.map.on("moveend", () => { this._flying = false; this.render(); });
+        this.map.on("click", () => this.closePanel());
+        mapEl.insertAdjacentHTML("beforeend",
+          '<div class="map-legend cm-legend" aria-hidden="true">' +
+          '<span class="lg"><i class="lg-dot lg-green"></i>Low</span>' +
+          '<span class="lg"><i class="lg-dot lg-yellow"></i>Moderate</span>' +
+          '<span class="lg"><i class="lg-dot lg-red"></i>High</span></div>');
+        panelEl.classList.add("cm-panel");
+        setTimeout(() => this.map.invalidateSize(), 80);
+        this.render();
+      },
+
+      scopeList() {
+        return this.mini
+          ? DESTINATIONS.filter((d) => d.near === state.currentLocation)
+          : DESTINATIONS.slice();
+      },
+
+      beginFly() {
+        if (!this.map) return;
+        if (this._flying) this.map.stop(); // cancel in-flight animation cleanly
+        this._flying = true;
+        this.map.once("moveend", () => { this._flying = false; });
+      },
+
+      flyHome() {
+        const loc = state.currentLocation;
+        this.lastLoc = loc;
+        if (mapEl.offsetWidth === 0) return; // hidden container — skip animation
+        this.beginFly();
+        const ds = DESTINATIONS.filter((d) => d.near === loc && d.coords);
+        if (ds.length) this.map.flyToBounds(L.latLngBounds(ds.map((d) => d.coords)).pad(0.35), { duration: 0.7 });
+        else this.map.flyTo(USER_POS[loc] || CITY_COORDS[loc] || [22, 79], 12, { duration: 0.7 });
+      },
+
+      render() {
+        if (!this.map) return;
+        const z = this.map.getZoom();
+        const list = this.scopeList();
+        this.layer.clearLayers();
+        this.markers.clear();
+        if (z < 11 && list.length > 1) {
+          const byCity = {};
+          list.forEach((d) => (byCity[d.near] = byCity[d.near] || []).push(d));
+          Object.keys(byCity).forEach((city) => {
+            const ds = byCity[city];
+            const worst = ds.find((x) => x.crowd === "high") || ds.find((x) => x.crowd === "moderate") || ds[0];
+            const m = L.marker(CITY_COORDS[city], {
+              icon: L.divIcon({
+                className: "cm-cluster-wrap",
+                html: '<span class="cm-cluster cc-' + worst.crowd + '">' + ds.length + "</span>",
+                iconSize: [34, 34], iconAnchor: [17, 17],
+              }),
+            });
+            m.on("click", () => {
+              this.beginFly();
+              this.map.flyToBounds(L.latLngBounds(ds.map((d) => d.coords)).pad(0.35), { duration: 0.6 });
+            });
+            this.layer.addLayer(m);
+            this.markers.set("cluster:" + city, m);
+          });
+        } else {
+          list.forEach((d) => {
+            const m = L.marker(d.coords, {
+              icon: L.divIcon({
+                className: "cm-pin-wrap",
+                html: '<span class="cm-pin-dot ' + d.crowd + (d.id === this.currentId ? " selected" : "") + '"></span><span class="cm-pin-lbl">' + d.name + "</span>",
+                iconSize: [16, 16], iconAnchor: [8, 8],
+              }),
+              title: d.name,
+            });
+            m.on("click", (e) => { L.DomEvent.stopPropagation(e); this.openPanel(d.id, false); });
+            m.on("mouseover", () => m.getElement() && m.getElement().classList.add("pin-hover"));
+            m.on("mouseout", () => m.getElement() && m.getElement().classList.remove("pin-hover"));
+            this.layer.addLayer(m);
+            this.markers.set(d.id, m);
+          });
+        }
+        if (this.userMark) { try { this.map.removeLayer(this.userMark); } catch (e) { /* mid-animation */ } }
+        const pos = USER_POS[state.currentLocation] || CITY_COORDS[state.currentLocation];
+        if (pos && mapEl.offsetWidth > 0) {
+          try {
+            this.userMark = L.marker(pos, {
+              icon: L.divIcon({ className: "cm-user-wrap", html: '<span class="cm-user"></span>', iconSize: [18, 18], iconAnchor: [9, 9] }),
+              interactive: false, zIndexOffset: 600,
+            }).addTo(this.map);
+          } catch (e) { this.userMark = null; }
+        }
+        this.stylePins();
+        if (this.currentId) {
+          const d = DESTINATIONS.find((x) => x.id === this.currentId);
+          if (d) this.paintPanel(d);
+        }
+      },
+
+      refresh() {
+        if (!this.map) { this.ensure(); return; }
+        if (this.lastLoc !== state.currentLocation) {
+          this.currentId = null;
+          this.flyHome();
+        }
+        this.render();
+      },
+
+      stylePins() {
+        const z = this.map ? this.map.getZoom() : 12;
+        this.markers.forEach((m) => {
+          const elx = m.getElement();
+          if (elx) elx.classList.toggle("lbl-on", z >= 12);
+        });
+      },
+
+      flyAndOpen(id) {
+        const d = DESTINATIONS.find((x) => x.id === id);
+        if (!d || !this.map) return;
+        const zoom = Math.max(this.map.getZoom() || 12, 13);
+        if (!this._flying) this.map.invalidateSize();
+        this.beginFly();
+        this.map.flyTo(d.coords, zoom, { duration: 0.8 });
+        setTimeout(() => this.openPanel(id, false), 850);
+      },
+
+      openPanel(id, pan) {
+        const d = DESTINATIONS.find((x) => x.id === id);
+        if (!d) return;
+        this.currentId = id;
+        state.selectedDest = this.mini ? id : state.selectedDest;
+        if (this.mini) state.selectedDest = id;
+        this.markers.forEach((m, key) => {
+          const elx = m.getElement();
+          if (elx) elx.classList.remove("pin-sel");
+        });
+        const mk = this.markers.get(id);
+        if (mk && mk.getElement()) mk.getElement().classList.add("pin-sel");
+        if (pan && this.map) {
+          this.beginFly();
+          this.map.flyTo(d.coords, Math.max(this.map.getZoom(), 13), { duration: 0.6 });
+        }
+        this.paintPanel(d);
+        if (!this.mini) this.bindSheetDrag();
+        this.panelEl.hidden = false;
+        requestAnimationFrame(() => this.panelEl.classList.add("open"));
+      },
+
+      closePanel() {
+        this.currentId = null;
+        if (this.mini) state.selectedDest = null;
+        this.markers.forEach((m) => {
+          const elx = m.getElement();
+          if (elx) elx.classList.remove("pin-sel");
+        });
+        this.panelEl.classList.remove("open");
+        this.panelEl.hidden = true;
+      },
+
+      paintPanel(d) {
+        const alerted = CM_ALERTS.has(d.id);
+        this.panelEl.innerHTML =
+          (this.mini ? "" : '<div class="cm-grab" aria-hidden="true"><i></i></div>') +
+          heroImage(d) +
+          '<button class="cm-panel-x" data-cm-close aria-label="Close details">×</button>' +
+          '<div class="mp-body">' +
+            '<div class="s-top"><h3>' + d.name + "</h3>" + crowdBadge(d.crowd) + "</div>" +
+            '<p class="s-loc">' + d.location + "</p>" +
+            capacityBar(d.capacity) +
+            vsFootfall(d.vsAverage) +
+            (d.queueMin > 0 ? '<p class="cm-queue">⏱ Main-gate queue: about <strong>' + d.queueMin + " min</strong></p>" : "") +
+            weatherBlock(d) +
+            (d.events.length ? eventsBlock(d) : "") +
+            facilitiesBlock(d) +
+            '<p class="cm-price">' + (d.price.ind === 0
+              ? "🎟 Free entry"
+              : "🎟 " + fmtINR(d.price.ind) + " (Indian)" + (d.price.fx ? " · " + fmtINR(d.price.fx) + " (Foreign national)" : "")) + "</p>" +
+            '<div class="cm-actions">' +
+              '<button type="button" class="btn btn-pill btn-primary" data-cm-book="' + d.id + '">Book tickets</button>' +
+              '<button type="button" class="cm-act" data-cm-dir="' + d.id + '">Get directions</button>' +
+              '<button type="button" class="cm-act' + (alerted ? " done" : "") + '" data-cm-alert="' + d.id + '">' +
+                (alerted ? "🔔 Alerts on ✓" : "Get alerts for this place") + "</button>" +
+            "</div>" +
+          "</div>";
+      },
+
+      highlight(ids) {
+        if (!this.map) return;
+        ids.forEach((id) => {
+          const mk = this.markers.get(id);
+          const elx = mk && mk.getElement();
+          if (elx) {
+            elx.classList.add("hl-ring");
+            setTimeout(() => elx.classList.remove("hl-ring"), 3500);
+          }
+        });
+      },
+
+      bindSheetDrag() {
+        const grab = this.panelEl.querySelector(".cm-grab");
+        if (!grab) return;
+        let startY = null;
+        grab.addEventListener("touchstart", (e) => { startY = e.touches[0].clientY; }, { passive: true });
+        grab.addEventListener("touchmove", (e) => {
+          if (startY === null) return;
+          if (e.touches[0].clientY - startY > 55) { this.closePanel(); startY = null; }
+        }, { passive: true });
+        grab.addEventListener("touchend", () => { startY = null; });
+      },
+    };
+
+    panelEl.addEventListener("click", (e) => {
+      if (e.target.closest("[data-cm-close]")) { cm.closePanel(); return; }
+      const book = e.target.closest("[data-cm-book]");
+      if (book) { guideToolTicketBooking(book.dataset.cmBook); return; }
+      const dir = e.target.closest("[data-cm-dir]");
+      if (dir) { guideToolDirections(dir.dataset.cmDir); return; }
+      const al = e.target.closest("[data-cm-alert]");
+      if (al && !al.classList.contains("done")) {
+        CM_ALERTS.add(al.dataset.cmAlert);
+        const d = DESTINATIONS.find((x) => x.id === al.dataset.cmAlert);
+        toast("🔔 Alerts on for " + d.name + " — we'll ping you if it gets busy");
+        al.classList.add("done");
+        al.textContent = "🔔 Alerts on ✓";
+      }
+    });
+
+  CM_INSTANCES[key] = cm;
+  return cm;
+}
+
+  // Debug/integration seam
+  window.CrowdMaps = CM_INSTANCES;
+
+  function getMainMap() { return getCrowdMap("main"); }
+  function getMiniMap() { return getCrowdMap("mini"); }
+
+  /* ---------- Take over the spotlight mini map + panel ---------- */
+
+  renderMap = function () { getMiniMap() && getMiniMap().refresh(); };
+
+  renderMapPanel = function () {
+    const cm = getMiniMap();
+    if (!cm) return;
+    if (state.selectedDest) cm.openPanel(state.selectedDest, false);
+    else cm.closePanel();
+  };
+
+  /* ---------- Full map view lifecycle ---------- */
+
+  let cmMainVisited = false;
+
+  showView = (function (orig) {
+    return function (target) {
+      orig(target);
+      if (state.view === "crowdmap") {
+        const cm = getMainMap();
+        if (cm) {
+          cm.ensure();
+          if (!cmMainVisited) { cmMainVisited = true; cm.flyHome(); }
+        }
+      }
+    };
+  })(showView);
+
+  function initCrowdMapView() {
+    const search = document.getElementById("cm-search");
+    if (!search) return;
+    document.getElementById("cm-search-list").innerHTML =
+      DESTINATIONS.map((d) => '<option value="' + d.name + '">').join("");
+    search.addEventListener("change", () => {
+      const d = findPlace(search.value);
+      if (!d) { toast("No tracked destination matches that search"); return; }
+      getMainMap().flyAndOpen(d.id);
+      search.value = "";
+      search.blur();
+    });
+
+    // Home screen "Open full map" link
+    document.getElementById("cm-openlink").addEventListener("click", () => {
+      const sel = state.selectedDest;
+      showView("view-crowdmap");
+      if (sel) setTimeout(() => getMainMap().flyAndOpen(sel), 600);
+    });
+
+    onCrowdDrift(() => {
+      if (state.view === "crowdmap") getMainMap() && getMainMap().render();
+      if (state.view === "dashboard") { renderSpotlight(); }
+    });
+  }
+
+  /* ---------- Tour Guide tool layer (matches system-prompt signatures) ---------- */
+
+  function findPlace(q) {
+    if (!q) return null;
+    const s = q.toLowerCase().trim();
+    return DESTINATIONS.find((d) => d.id === s)
+      || DESTINATIONS.find((d) => s.includes(d.name.toLowerCase()))
+      || DESTINATIONS.find((d) => d.name.toLowerCase().split(" ").some((w) => w.length > 4 && s.includes(w)))
+      || null;
+  }
+
+  const TourGuideTools = {
+    get_crowd_level(place) {
+      const d = findPlace(place);
+      if (!d) return null;
+      return { place: d.name, crowd: CROWD_WORD[d.crowd], capacityPct: d.capacity, vsAveragePct: d.vsAverage, queueMin: d.queueMin };
+    },
+    crowd_classification(capacityPct) {
+      return capacityPct >= 80 ? "high" : capacityPct >= 50 ? "moderate" : "low";
+    },
+    get_alternative_destinations(place) {
+      const d = findPlace(place);
+      if (!d) return [];
+      return DESTINATIONS.filter((x) => x.id !== d.id && x.near === d.near && x.crowd !== "high")
+        .sort((a, b) => a.capacity - b.capacity).slice(0, 3)
+        .map((x) => ({ id: x.id, name: x.name, crowd: x.crowd, capacityPct: x.capacity }));
+    },
+    open_crowd_map(place) {
+      const d = findPlace(place);
+      if (!d) return { ok: false, error: "Place not in tracked dataset — refusing to invent coordinates" };
+      guideOpenCrowdMap(d.id);
+      return { ok: true, place: d.name, lat: d.coords[0], lng: d.coords[1] };
+    },
+    subscribe_alert(place) {
+      const d = findPlace(place);
+      if (!d) return { ok: false };
+      CM_ALERTS.add(d.id);
+      return { ok: true, place: d.name };
+    },
+    get_transport_options(place) {
+      const d = findPlace(place);
+      return d ? { place: d.name, city: d.location.split(", ").pop(), modes: ["flight", "train", "bus", "cab", "auto", "bike"] } : null;
+    },
+  };
+
+  // Integration seam: a real backend/websocket bridge can invoke these
+  // tool functions directly, exactly as the chat logic does in-page.
+  window.TourGuideTools = TourGuideTools;
+
+  /* Tool → screen routers (same flows the map panel buttons use) */
+
+  function guideToolTicketBooking(id) {
+    const d = DESTINATIONS.find((x) => x.id === id) || ATTRACTIONS.find((x) => x.id === id);
+    if (!d) return;
+    showView("view-tickets");
+    tkState.q = d.name.toLowerCase();
+    tkState.city = "any"; tkState.cat = "any";
+    const s = document.getElementById("tk-search");
+    if (s) s.value = d.name;
+    renderTickets();
+    setTimeout(() => openTicketModal(d.id), 250);
+  }
+
+  function guideToolDirections(id) {
+    const d = DESTINATIONS.find((x) => x.id === id);
+    if (!d) return;
+    showView("view-rides");
+    const loc = LOCATIONS.find((l) => l.id === state.currentLocation) || LOCATIONS[0];
+    document.getElementById("rd-pickup").value = "Current location — " + loc.area;
+    document.getElementById("rd-drop").value = d.name;
+    updateRideFare();
+    toast("Route set to " + d.name + " — pick a vehicle");
+  }
+
+  function guideToolTransport(place) {
+    const d = findPlace(place);
+    showView("view-transport");
+    if (d) {
+      const loc = LOCATIONS.find((l) => l.id === state.currentLocation) || LOCATIONS[0];
+      document.getElementById("tr-from").value = loc.city;
+      document.getElementById("tr-to").value = d.location.split(", ").pop();
+      renderTransport();
+    }
+  }
+
+  /* ---------- open_crowd_map handoff ---------- */
+
+  function guideOpenCrowdMap(destId) {
+    const sheet = document.getElementById("tg-sheet");
+    sheet.classList.add("tg-handoff");
+    setTimeout(() => {
+      sheet.hidden = true;
+      sheet.classList.remove("tg-handoff");
+    }, 420);
+    document.body.classList.add("tg-docked");
+    showView("view-crowdmap");
+    const hand = document.getElementById("cm-handoff");
+    if (hand) {
+      hand.hidden = false;
+      clearTimeout(hand._t);
+      hand._t = setTimeout(() => { hand.hidden = true; }, 3200);
+    }
+    setTimeout(() => {
+      const cm = getMainMap();
+      cm && cm.ensure();
+      cm && cm.flyAndOpen(destId);
+    }, 350);
+  }
+
+  /* ---------- Tour Guide chat: real input + tool calls ---------- */
+
+  function toolChip(label) {
+    return '<div class="tg-toolchip"><span>🛠</span>' + label + "</div>";
+  }
+
+  function crowdSentence(d) {
+    const up = d.vsAverage >= 0;
+    return 'Right now <b>' + d.name + "</b> is <span class=\"crowd c-" + (d.crowd === "high" ? "red" : d.crowd === "moderate" ? "yellow" : "green") + '">' + CROWD_WORD[d.crowd] +
+      "</span> — " + d.capacity + "% full (" + (up ? "+" : "−") + Math.abs(d.vsAverage) + "% vs usual)" +
+      (d.queueMin > 0 ? ", about " + d.queueMin + " min at the gate." : ".");
+  }
+
+  startGuideChat = function () {
+    const body = document.getElementById("tg-sheet-body");
+    let demoStarted = false;
+
+    function push(html, who) {
+      const div = document.createElement("div");
+      div.className = "chat-msg " + (who || "bot");
+      div.innerHTML = html;
+      body.appendChild(div);
+      body.scrollTop = body.scrollHeight;
+      return div;
+    }
+
+    function botSay(html, chip) {
+      const t = document.createElement("div");
+      t.className = "typing";
+      t.innerHTML = "<span></span><span></span><span></span>";
+      body.appendChild(t);
+      body.scrollTop = body.scrollHeight;
+      setTimeout(() => {
+        t.remove();
+        if (chip) push(chip, "tool");
+        push(html, "bot");
+      }, 1100);
+    }
+
+    function answer(text) {
+      const d = findPlace(text);
+      const t = text.toLowerCase();
+      if (/alternative|instead|quieter|less crowd|avoid/.test(t)) {
+        if (!d) return botSay("Which place should I find quieter options for?");
+        const alts = TourGuideTools.get_alternative_destinations(d.name);
+        if (!alts.length) return botSay("Everything near " + d.name + " is busy right now — tomorrow morning looks better everywhere.");
+        setTimeout(() => highlightAlternatives(alts.map((a) => a.id)), 900);
+        return botSay(
+          "Good call. Quieter picks near you: " +
+          alts.map((a) => "<b>" + a.name + "</b> (" + CROWD_WORD[a.crowd] + " · " + a.capacityPct + "%)").join(", ") +
+          ". I've highlighted them on the map if it's open.",
+          toolChip("get_alternative_destinations → " + d.name));
+      }
+      if (/map|show me|where|take me|open/.test(t) && d) {
+        botSay("Opening the live map for <b>" + d.name + "</b> — I'll wait right here in the corner.",
+          toolChip("open_crowd_map → " + d.name));
+        setTimeout(() => guideOpenCrowdMap(d.id), 1500);
+        return;
+      }
+      if (/ticket|entry|book/.test(t) && d) {
+        botSay("Pulling up ticket booking for <b>" + d.name + "</b> — slots and prices are in the modal.",
+          toolChip("ticket_booking → " + d.name));
+        setTimeout(() => guideToolTicketBooking(d.id), 1500);
+        return;
+      }
+      if (/alert|notify/.test(t) && d) {
+        TourGuideTools.subscribe_alert(d.name);
+        return botSay("Done — I'll ping you if <b>" + d.name + "</b> crosses Moderate crowd. 🔔", toolChip("subscribe_alert → " + d.name));
+      }
+      if (/cab|auto|ride|direction|reach|get to/.test(t) && d) {
+        botSay("Setting up a ride to <b>" + d.name + "</b> — pick a vehicle on the next screen.", toolChip("vehicle_rental → " + d.name));
+        setTimeout(() => guideToolDirections(d.id), 1500);
+        return;
+      }
+      if (/train|flight|bus|transport/.test(t)) {
+        botSay("Opening travel search" + (d ? " for <b>" + d.location.split(", ").pop() + "</b>" : "") + " — flight, train and bus in one view.", toolChip("get_transport_options"));
+        setTimeout(() => guideToolTransport(d && d.name), 1200);
+        return;
+      }
+      if (d) {
+        return botSay(
+          crowdSentence(d) +
+          (d.crowd === "high"
+            ? " I can <b>open the live map</b>, find a quieter alternative, or set an alert — just say the word."
+            : " Decent time to go. Want the map, tickets, or a ride there?"),
+          toolChip("get_crowd_level → " + d.name));
+      }
+      botSay("I can check live crowds, open the map, book tickets, rides or transport, and set alerts. Try \"How crowded is the Taj Mahal?\" or \"Show me Amer Fort on the map\".");
+    }
+
+    function demo() {
+      if (demoStarted) return;
+      demoStarted = true;
+      setTimeout(() => {
+        if (!document.getElementById("tg-sheet").hidden && !document.getElementById("tg-input").value) {
+          push("How crowded is the Taj Mahal right now?", "user");
+          setTimeout(() => answer("How crowded is the Taj Mahal right now?"), 500);
+        }
+      }, 3500);
+    }
+
+    push(
+      "Namaste! I'm <b>Tour Guide</b> 👋 — I watch live crowds at every tracked spot. Ask me anything, or try:" +
+      '<span class="tg-sugs">' +
+        '<button type="button" data-sug="How crowded is the Taj Mahal right now?">How crowded is the Taj Mahal?</button>' +
+        '<button type="button" data-sug="Show me Amer Fort on the map">Show Amer Fort on the map</button>' +
+        '<button type="button" data-sug="Any quieter alternative to Red Fort?">Quieter alternative to Red Fort</button>' +
+      '</span>' +
+    "");
+    document.getElementById("tg-sheet-body").addEventListener("click", (e) => {
+      const sug = e.target.closest("[data-sug]");
+      if (!sug) return;
+      const input = document.getElementById("tg-input");
+      input.value = sug.dataset.sug;
+      document.getElementById("tg-form").dispatchEvent(new Event("submit", { cancelable: true }));
+    });
+    demo();
+
+    document.getElementById("tg-form").addEventListener("submit", (e) => {
+      e.preventDefault();
+      const input = document.getElementById("tg-input");
+      const text = input.value.trim();
+      if (!text) return;
+      push(text, "user");
+      input.value = "";
+      answer(text);
+    });
+  };
+
+  openGuideSheet = function (confirmText) {
+    const sheet = document.getElementById("tg-sheet");
+    sheet.hidden = false;
+    if (!sheet.dataset.started) {
+      sheet.dataset.started = "1";
+      startGuideChat();
+    }
+    const body = document.getElementById("tg-sheet-body");
+    const div = document.createElement("div");
+    div.className = "chat-msg bot";
+    div.innerHTML = confirmText;
+    body.appendChild(div);
+    body.scrollTop = body.scrollHeight;
+  };
+
+  function highlightAlternatives(ids) {
+    [getMainMap(), getMiniMap()].forEach((cm) => cm && cm.highlight(ids));
+  }
+
+  /* ---------- boot additions ---------- */
+
+  initCrowdMapView();
+  startCrowdDrift();
 
   if (document.readyState === "loading") {
     document.addEventListener("DOMContentLoaded", init);
